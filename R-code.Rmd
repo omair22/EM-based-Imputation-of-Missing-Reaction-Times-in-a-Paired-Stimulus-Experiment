@@ -1,0 +1,135 @@
+---
+title: "Untitled"
+author: "Omair"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+
+```{r}
+
+library(ggplot2)
+
+# === 1. Load Data ===
+data_raw <- read.table("interexp.dat", header = FALSE, stringsAsFactors = FALSE)
+colnames(data_raw) <- c("stimA", "stimB")
+
+data <- data.frame(
+  stimA = as.numeric(gsub("[^0-9\\.]", "", data_raw$stimA)),
+  stimB = as.numeric(gsub("[^0-9\\.]", "", data_raw$stimB))
+)
+
+data <- data[!(is.na(data$stimA) & is.na(data$stimB)), ]
+
+YA <- data$stimA
+YB <- data$stimB
+
+
+
+N <- nrow(data)
+```
+
+
+
+
+```{r}
+# === 2. Initialization ===
+muA <- mean(YA, na.rm = TRUE)
+muB <- mean(YB, na.rm = TRUE)
+sigmaA2 <- var(YA, na.rm = TRUE)
+sigmaB2 <- var(YB, na.rm = TRUE)
+rho <- cor(YA, YB, use = "complete.obs")
+
+tol <- 1e-6
+max_iter <- 100
+converged <- FALSE
+
+EYA <- YA
+EYB <- YB
+```
+
+
+
+
+```{r}
+# === 3. EM Algorithm ===
+for (iter in 1:max_iter) {
+  idx_A_missing <- is.na(YA) & !is.na(YB)
+  idx_B_missing <- !is.na(YA) & is.na(YB)
+
+  EYA[idx_A_missing] <- muA + rho * sqrt(sigmaA2) / sqrt(sigmaB2) * (YB[idx_A_missing] - muB)
+  EYB[idx_B_missing] <- muB + rho * sqrt(sigmaB2) / sqrt(sigmaA2) * (YA[idx_B_missing] - muA)
+
+  muA_new <- mean(EYA)
+  muB_new <- mean(EYB)
+  sigmaA2_new <- mean(EYA^2) - muA_new^2
+  sigmaB2_new <- mean(EYB^2) - muB_new^2
+  covAB <- mean(EYA * EYB) - muA_new * muB_new
+  rho_new <- covAB / sqrt(sigmaA2_new * sigmaB2_new)
+
+  diffs <- c(abs(muA_new - muA), abs(muB_new - muB),
+             abs(sigmaA2_new - sigmaA2), abs(sigmaB2_new - sigmaB2),
+             abs(rho_new - rho))
+  if (max(diffs) < tol) {
+    converged <- TRUE
+    break
+  }
+
+  muA <- muA_new; muB <- muB_new
+  sigmaA2 <- sigmaA2_new; sigmaB2 <- sigmaB2_new; rho <- rho_new
+}
+
+cat("Converged in", iter, "iterations\n")
+cat(sprintf("muA = %.3f, muB = %.3f\n", muA, muB))
+cat(sprintf("varA = %.3f, varB = %.3f, rho = %.3f\n", sigmaA2, sigmaB2, rho))
+```
+
+```{r}
+# === 4. Paired T-Tests ===
+
+complete_idx <- complete.cases(YA, YB)
+pre_ttest <- t.test(YA[complete_idx], YB[complete_idx], paired = TRUE)
+print(pre_ttest)
+
+
+post_ttest <- t.test(EYA, EYB, paired = TRUE)
+print(post_ttest)
+```
+
+
+
+
+
+```{r}
+# === 5. Plot Distributions ===
+df_long <- data.frame(
+  value = c(YA, EYA, YB, EYB),
+  stimulus = rep(c("A", "A", "B", "B"), each = N),
+  type = c(rep("Observed", N), rep("Imputed", N), rep("Observed", N), rep("Imputed", N))
+)
+
+ggplot(df_long, aes(x = value, color = type, linetype = type)) +
+  geom_density(size = 1) +
+  facet_wrap(~stimulus, scales = "free") +
+  labs(title = "Reaction Time Distributions (Stimulus A vs B)",
+       x = "Reaction Time (ms)", y = "Density") +
+  theme_minimal()
+
+```
+
+
+```{r}
+# === 6. Export Imputed Dataset ===
+completed_data <- data.frame(StimulusA = EYA, StimulusB = EYB)
+write.csv(completed_data, "new_dataset.csv", row.names = FALSE)
+
+```
+
